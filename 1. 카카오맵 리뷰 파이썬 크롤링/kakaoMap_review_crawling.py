@@ -8,24 +8,34 @@ from selenium.common.exceptions import ElementNotInteractableException
 from selenium.common.exceptions import StaleElementReferenceException
 from bs4 import BeautifulSoup
 
+import csv
+import regex as re
+
 ##############################################################  ############
 ##################### variable related selenium ##########################
 ##########################################################################
 options = webdriver.ChromeOptions()
 options.add_argument('headless')
 options.add_argument('lang=ko_KR')
-chromedriver_path = "chromedriver"
+chromedriver_path = "chromedriver.exe"
 driver = webdriver.Chrome(os.path.join(os.getcwd(), chromedriver_path), options=options)  # chromedriver 열기
 
 
 def main():
     global driver, load_wb, review_num
 
+        
+    f = open('kakao.csv', 'w', newline='', encoding='utf-8')
+    write = csv.writer(f)
+    fields = ['이름', '위치', '리뷰', '별점']
+    write.writerow(fields)
+    f.close()
+
     driver.implicitly_wait(4)  # 렌더링 될때까지 기다린다 4초
     driver.get('https://map.kakao.com/')  # 주소 가져오기
 
     # 검색할 목록
-    place_infos = ['강남 맛집']
+    place_infos = ['동대문구 카페', '성북구 카페']
 
     for i, place in enumerate(place_infos):
         # delay
@@ -41,6 +51,7 @@ def main():
 def search(place):
     global driver
 
+              
     search_area = driver.find_element_by_xpath('//*[@id="search.keyword.query"]')  # 검색 창
     search_area.send_keys(place)  # 검색어 입력
     driver.find_element_by_xpath('//*[@id="search.keyword.submit"]').send_keys(Keys.ENTER)  # Enter로 검색
@@ -57,23 +68,46 @@ def search(place):
     crawling(place, place_lists)
     search_area.clear()
 
+    first = 0
+
     # 우선 더보기 클릭해서 2페이지
     try:
         driver.find_element_by_xpath('//*[@id="info.search.place.more"]').send_keys(Keys.ENTER)
         sleep(1)
-
-        # 2~ 5페이지 읽기
-        for i in range(2, 6):
-            # 페이지 넘기기
-            xPath = '//*[@id="info.search.page.no' + str(i) + '"]'
-            driver.find_element_by_xpath(xPath).send_keys(Keys.ENTER)
-            sleep(1)
-
+        if first:
             html = driver.page_source
             soup = BeautifulSoup(html, 'html.parser')
             place_lists = soup.select('.placelist > .PlaceItem') # 장소 목록 list
-
             crawling(place, place_lists)
+        # 2~ 5페이지 읽기
+        flag = 0
+        while(1):
+
+            for i in range(2, 6):
+                # 페이지 넘기기
+                xPath = '//*[@id="info.search.page.no' + str(i) + '"]'
+                try:
+                    driver.find_element_by_class_name('INACTIVE HIDDEN')
+                except(NoSuchElementException):
+                    pass
+                else:
+                    flag = 1
+                    break
+
+                driver.find_element_by_xpath(xPath).send_keys(Keys.ENTER)
+                sleep(1)
+
+                html = driver.page_source
+                soup = BeautifulSoup(html, 'html.parser')
+                place_lists = soup.select('.placelist > .PlaceItem') # 장소 목록 list
+
+                crawling(place, place_lists)
+            
+            if flag:
+                break
+
+            first = 1
+            driver.find_element_by_xpath('//*[@id="info.search.page.next"]').send_keys(Keys.ENTER)
 
     except ElementNotInteractableException:
         print('not found')
@@ -97,15 +131,17 @@ def crawling(place, place_lists):
         place_address = place.select('.info_item > .addr > p')[0].text  # place address
 
         detail_page_xpath = '//*[@id="info.search.place.list"]/li[' + str(i + 1) + ']/div[5]/div[4]/a[1]'
+        if len(driver.find_elements_by_xpath(detail_page_xpath))==0:
+            continue
         driver.find_element_by_xpath(detail_page_xpath).send_keys(Keys.ENTER)
         driver.switch_to.window(driver.window_handles[-1])  # 상세정보 탭으로 변환
-        sleep(1)
+        
 
-        print('####', place_name)
+
+        sleep(1)
 
         # 첫 페이지
         extract_review(place_name)
-
         # 2-5 페이지
         idx = 3
         try:
@@ -145,33 +181,21 @@ def crawling(place, place_lists):
 
 def extract_review(place_name):
     global driver
-
-    ret = True
-
     html = driver.page_source
     soup = BeautifulSoup(html, 'html.parser')
+    f = open('kakao.csv', 'a', newline='', encoding='utf-8')
+    write = csv.writer(f)
 
     # 첫 페이지 리뷰 목록 찾기
     review_lists = soup.select('.list_evaluation > li')
+    position = soup.select('.txt_address')
 
     # 리뷰가 있는 경우
     if len(review_lists) != 0:
         for i, review in enumerate(review_lists):
             comment = review.select('.txt_comment > span') # 리뷰
             rating = review.select('.grade_star > em') # 별점
-            val = ''
-            if len(comment) != 0:
-                if len(rating) != 0:
-                    val = comment[0].text + '/' + rating[0].text.replace('점', '')
-                else:
-                    val = comment[0].text + '/0'
-                print(val)
-
-    else:
-        print('no review in extract')
-        ret = False
-
-    return ret
+            write.writerow([place_name, re.sub(r'[\n\s]+', ' ', position[0].text), comment[0].text, rating[0].text.replace('점', '')])
 
 
 if __name__ == "__main__":
